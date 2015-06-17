@@ -1,0 +1,190 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+#from __future__ import division
+import numpy as np
+import scipy as sp
+import matplotlib.pyplot as plt
+import os, argparse, copy
+import cv2, math, Lbp, rof
+
+EnableOfDisplay = False
+WriteToDiskOfImg = False
+
+def WriteImgToSpecifiedDirectory(name, img):
+    if (len(img) == 0) or (len(name) == 0):
+        print ("Please check the image or the name!\n")
+    else:
+        cv2.imwrite(name, img)
+
+def DisplayImage(name, image, waittime = 0):
+    cv2.imshow(name, image)
+    cv2.waitKey(waittime)
+    cv2.destroyAllWindows()
+
+def LenOfLine(x1, y1, x2, y2):
+    return math.sqrt(abs(x1-x2)**2 + abs(y1-y2)**2)
+
+def Init(img):
+    '''
+    InitOfVandS(Img):
+    Input  : image
+    Output : [sobelImg, angle, magnitude]
+    '''
+    # !< 去噪
+    img = cv2.blur(img, (3,3))
+
+    # !< 求取水平和垂直方向的三阶梯度, foat16, 3*3窗口
+    sobelxf = cv2.Sobel(img, cv2.CV_32F, 3, 0, ksize = 5)
+    sobelyf = cv2.Sobel(img, cv2.CV_32F, 0, 3, ksize = 5)
+
+    # !< 求取边缘点的角度和幅度值
+    Size = np.shape(img)
+    magnitude = np.zeros(Size, dtype = np.float32)
+    angle = np.zeros(Size, dtype = np.float32)
+    cv2.cartToPolar(sobelxf, sobelyf, magnitude, angle, True)  # True for angle in degree
+
+    # Soble操作之后，我们从x-gradient中减去y-gradient，得到包含高的水平梯度和低的垂直梯度的图像区域。
+    # sobelImg = cv2.subtract(sobelxf, sobelyf)
+    sobelImg = cv2.convertScaleAbs(sobelxf) + cv2.convertScaleAbs(sobelyf)
+
+    if WriteToDiskOfImg:
+        WriteImgToSpecifiedDirectory("Sobelx.jpg", sobelxf)
+        WriteImgToSpecifiedDirectory("Sobely.jpg", sobelyf)
+        WriteImgToSpecifiedDirectory("Sobel.jpg", sobelImg)
+        WriteImgToSpecifiedDirectory("Magnitude.jpg", magnitude)
+        WriteImgToSpecifiedDirectory("Angle.jpg", angle)
+
+    if EnableOfDisplay:
+        # Sobelx32f
+        plt.subplot(2,3,1),plt.imshow(sobelxf,cmap = 'gray')
+        plt.title('Sobelxf'), plt.xticks([]), plt.yticks([])
+        # Sobely32f
+        plt.subplot(2,3,2),plt.imshow(sobelyf,cmap = 'gray')
+        plt.title('Sobelyf'), plt.xticks([]), plt.yticks([])
+        # SobleImg
+        plt.subplot(2,3,3),plt.imshow(sobelImg,cmap = 'gray')
+        plt.title('SobelImg'), plt.xticks([]), plt.yticks([])
+        # Magnitude
+        plt.subplot(2,3,4),plt.imshow(magnitude,cmap = 'gray')
+        plt.title('Magnitude'), plt.xticks([]), plt.yticks([])
+        # Angle
+        plt.subplot(2,3,5),plt.imshow(angle,cmap = 'gray')
+        plt.title('Angle'), plt.xticks([]), plt.yticks([])
+        # GrayImg
+        plt.subplot(2,3,6),plt.imshow(img,cmap = 'gray')
+        plt.title('img'), plt.xticks([]), plt.yticks([])
+        plt.show()
+
+    return sobelImg, angle, magnitude
+
+def HoughLine(CannyEdge):
+    '''
+    HoughLine
+    input: CannyEdge:
+    return: Lines
+    '''
+    Lines = cv2.HoughLinesP(CannyEdge, 1, math.pi/180.0, 50, np.array([]), 50, 10)
+
+    return Lines
+
+def Surf(img):
+    surf = cv2.xfeatures2d.SURF_create()
+    surf.setHessianThreshold(1799)               # 300~500
+    surf.setUpright(True)                        # U-SURF
+    surf.setExtended(True)                       # 128-dim descriptors
+    kp = surf.detect(img)                        # kp:keypoints
+    kp, des = surf.compute(img,kp)               # des:descriptors
+    img2 = cv2.drawKeypoints(img, kp, None, (0, 0, 255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    #DisplayImage("KpImg", img2, 0)
+
+
+if __name__ == "__main__":
+    '''
+    __main__:
+    input : argv[1] or image path
+    output: book spine segment image
+    Usage :
+    $ python <name>.py --image=<imagepath> <Enter>
+    '''
+
+    # Load image for command line operator
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-i", "--image", required = True, help = "Path to the image")
+    args = vars(ap.parse_args())
+    InputImg = cv2.imread(args["image"])
+
+    # !< Load image
+    #InputImg = cv2.imread("./TestImgs/003.jpg")
+    Img      = cv2.resize(InputImg, (640,640), interpolation=cv2.INTER_NEAREST)
+    GrayImg  = cv2.cvtColor(Img,cv2.COLOR_BGR2GRAY)
+    rows, cols = np.shape(Img)[0:2]
+
+
+    # !< U-SURF for keypoinst and descriptors dectection
+    #Surf(GrayImg)
+
+    # !< sobel detection
+    sobelImg, angle, magnitude = Init(GrayImg)
+
+    # !< Canny edge detection
+    CannyEdge = cv2.Canny(GrayImg, 50, 150, None, 3, True)
+
+    # !< Hough line detection rows = a, cols = b, points = c
+    ColorEd  = cv2.cvtColor(CannyEdge, cv2.COLOR_GRAY2BGR)
+    lines    = HoughLine(CannyEdge)
+    a,b,c    = lines.shape
+    for i in range(a):
+        pt1x = lines[i][0][0]
+        pt1y = lines[i][0][1]
+        pt2x = lines[i][0][2]
+        pt2y = lines[i][0][3]
+        cv2.line(ColorEd, (pt1x, pt1y), (pt2x, pt2y), (0, 0, 255), 2, cv2.LINE_AA)
+    DisplayImage("lines", ColorEd, 1000)
+
+
+    '''
+    # !< init seeds
+    corners = cv2.goodFeaturesToTrack(CannyEdge, 128, 0.001, 10)
+    seeds = np.int0(corners)        # int64
+    for i in seeds:
+        x, y  = i.ravel()           # Coordinates 坐标
+        CurrAngle = angle[x,y]
+        CurrGrad  = sobelImg[x,y]
+        CurrVal   = GrayImg[x,y]
+
+        if (CurrAngle != 0) and (CurrGrad != 0) and (CurrVal != 0):
+            cv2.circle(Img, (x,y), 1, (255, 0, 0), 2, cv2.LINE_AA, 0)
+    #DisplayImage("Seeds", Img, 1000)
+    '''
+
+    # !< Line detection
+    LineDescriptor = cv2.createLineSegmentDetector()
+    LDlines, width, prec, nfa = LineDescriptor.detect(GrayImg)
+    LDlines = np.int0(LDlines)
+    a1,b1,c1 = LDlines.shape
+    for i in range(a1):
+        pt1x = LDlines[i][0][0]
+        pt1y = LDlines[i][0][1]
+        pt2x = LDlines[i][0][2]
+        pt2y = LDlines[i][0][3]
+        dist = LenOfLine(pt1x, pt1y, pt2x, pt2y)
+        if dist >= 15:
+            cv2.line(Img, (pt1x, pt1y), (pt2x, pt2y), (0, 0, 255), 2, cv2.LINE_AA)
+    DisplayImage("LineDetect", Img, 0)
+
+
+    '''
+    # !< Findcontours by cv2.findContours function
+    CannyEdge, contours, hierarchy = cv2.findContours(CannyEdge,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    for i in range(0,len(contours)):
+        cnt = contours[i]                                  # the ith contour
+        perimeter = cv2.arcLength(cnt,True)                # perimeter 闭合周长
+
+        if (perimeter >= 1000) and (perimeter <= (rows*cols)/4):
+            rect = cv2.minAreaRect(cnt)                    # Finds a rotated rectangle of the minimum area enclosing the input 2D point set.
+            box = cv2.boxPoints(rect)                      # Find four vertices of rectangle from above rect.
+            box = np.int0(box)                             # int64.
+            cv2.drawContours(Img, [box], 0, (0,0,255), 3)  # Draws contours outlines or filled contours.
+    #DisplayImage("box", Img)
+    '''
